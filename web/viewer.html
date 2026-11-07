@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remy Viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:15px system-ui,sans-serif; background:#111; color:#eee; display:flex; flex-direction:column; align-items:center; gap:10px; padding:16px; }
+  img { max-width:100%; max-height:80vh; background:#000; border-radius:8px; }
+  #stats { opacity:.8; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<img id="img" alt="waiting for frames">
+<div id="stats">Connecting…</div>
+<script>
+const img = document.getElementById('img'), stats = document.getElementById('stats');
+let n = 0, last = 0, ema = 0, prev;
+function connect() {
+  const ws = new WebSocket(`wss://${location.host}/ws/view`);
+  ws.binaryType = 'blob';
+  ws.onmessage = e => {
+    const url = URL.createObjectURL(e.data);
+    img.onload = () => URL.revokeObjectURL(url);
+    img.src = url;
+    const now = performance.now();
+    if (last) ema = ema ? ema * 0.7 + (now - last) * 0.3 : now - last;
+    last = now; n++;
+    stats.textContent = `${n} frames · ${(1000 / ema || 0).toFixed(2)} fps · ${(e.data.size / 1024).toFixed(0)} KB`;
+  };
+  ws.onopen = () => stats.textContent = 'Connected, waiting for phone…';
+  ws.onclose = () => { stats.textContent = 'Disconnected, retrying…'; setTimeout(connect, 1500); };
+}
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+server/certs/
+frames/
+__pycache__/
+.venv/

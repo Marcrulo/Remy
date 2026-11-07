@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Remy Capture</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font:16px system-ui,sans-serif; background:#111; color:#eee; display:flex; flex-direction:column; height:100dvh; }
+  video { flex:1; min-height:0; width:100%; object-fit:cover; background:#000; }
+  #bar { padding:12px 16px; display:flex; gap:12px; align-items:center; justify-content:space-between; }
+  button { font:inherit; padding:12px 20px; border:0; border-radius:10px; background:#2f7; color:#000; font-weight:600; }
+  button.stop { background:#f55; color:#fff; }
+  #info { font-size:13px; opacity:.8; line-height:1.4; }
+</style>
+</head>
+<body>
+<video id="v" playsinline muted autoplay></video>
+<div id="bar">
+  <div id="info">Idle</div>
+  <button id="btn">Start</button>
+</div>
+<script>
+const v = document.getElementById('v'), btn = document.getElementById('btn'), info = document.getElementById('info');
+let ws, stream, timer, wake, running = false, sent = 0, bytes = 0, settings = {fps:1, quality:0.7, width:768};
+const canvas = document.createElement('canvas');
+
+const setInfo = t => info.textContent = t;
+
+async function start() {
+  if (!navigator.mediaDevices) { setInfo('Camera needs HTTPS (secure context).'); return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: {ideal: 1280}, height: {ideal: 720} }, audio: false });
+  } catch (e) { setInfo('Camera error: ' + e.message); return; }
+  v.srcObject = stream;
+  try { wake = await navigator.wakeLock?.request('screen'); } catch {}
+  running = true; btn.textContent = 'Stop'; btn.className = 'stop';
+  connect();
+}
+
+function connect() {
+  if (!running) return;
+  ws = new WebSocket(`wss://${location.host}/ws/capture`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => setInfo('Connected');
+  ws.onmessage = e => { const m = JSON.parse(e.data); if (m.type === 'settings') { settings = m; restartLoop(); } };
+  ws.onclose = () => { clearInterval(timer); if (running) { setInfo('Reconnecting…'); setTimeout(connect, 1500); } };
+}
+
+function restartLoop() {
+  clearInterval(timer);
+  timer = setInterval(sendFrame, 1000 / settings.fps);
+}
+
+function sendFrame() {
+  if (!ws || ws.readyState !== 1 || !v.videoWidth) return;
+  if (ws.bufferedAmount > 1_000_000) return;  // skip if link is backed up
+  const scale = Math.min(1, settings.width / v.videoWidth);
+  canvas.width = Math.round(v.videoWidth * scale);
+  canvas.height = Math.round(v.videoHeight * scale);
+  canvas.getContext('2d').drawImage(v, 0, 0, canvas.width, canvas.height);
+  canvas.toBlob(async b => {
+    if (!b || ws.readyState !== 1) return;
+    ws.send(await b.arrayBuffer());
+    sent++; bytes += b.size;
+    setInfo(`Streaming ${settings.fps} fps · ${canvas.width}×${canvas.height}\n${sent} frames · ${(bytes/1024/sent).toFixed(0)} KB avg`);
+  }, 'image/jpeg', settings.quality);
+}
+
+function stop() {
+  running = false; clearInterval(timer); ws?.close();
+  stream?.getTracks().forEach(t => t.stop()); wake?.release?.();
+  v.srcObject = null; btn.textContent = 'Start'; btn.className = ''; setInfo('Stopped');
+}
+
+btn.onclick = () => running ? stop() : start();
+document.addEventListener('visibilitychange', async () => {
+  if (running && document.visibilityState === 'visible') { try { wake = await navigator.wakeLock?.request('screen'); } catch {} }
+});
+</script>
+</body>
+</html>
